@@ -6,6 +6,7 @@ use ratatui::{
     Frame,
 };
 use tokio::sync::mpsc::UnboundedSender;
+use unicode_width::UnicodeWidthChar;
 
 use crate::state_store::{action::Action, State};
 
@@ -25,7 +26,7 @@ impl InputBox {
 
     pub fn set_text(&mut self, new_text: &str) {
         self.text = String::from(new_text);
-        self.cursor_position = self.text.len();
+        self.cursor_position = self.get_max_cursor_position();
     }
 
     pub fn reset(&mut self) {
@@ -35,6 +36,12 @@ impl InputBox {
 
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
+    }
+
+    /// Gets the maximum cursor position (number of characters). 
+    fn get_max_cursor_position(&self) -> usize {
+        // Note: text.len() returns the number of bytes, not the number of characters.
+        self.text.char_indices().count()
     }
 
     fn move_cursor_left(&mut self) {
@@ -48,9 +55,14 @@ impl InputBox {
     }
 
     fn enter_char(&mut self, new_char: char) {
-        self.text.insert(self.cursor_position, new_char);
+        self.text.insert(self.get_cursor_byte_index(), new_char);
 
         self.move_cursor_right();
+    }
+
+    /// Gets the current cursor's byte index. Since the string is in UTF-8 format, character index != byte index.
+    fn get_cursor_byte_index(&self) -> usize {
+        self.text.char_indices().nth(self.cursor_position).map(|(i, _)| i).unwrap_or(self.text.len()) 
     }
 
     fn delete_char(&mut self) {
@@ -76,7 +88,20 @@ impl InputBox {
     }
 
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.text.len())
+        new_cursor_pos.clamp(0, self.get_max_cursor_position())
+    }
+
+    /// Calculates the cursor offset on the terminal, taking into account character width to handle wide characters (e.g., double-byte characters).
+    fn get_cursor_offset_in_terminal(&self) -> u16 {
+        let mut cursor_offset = 0;
+        for (i, c) in self.text.chars().enumerate() {
+            if i == self.cursor_position {
+                break;
+            }
+            // Add character width
+            cursor_offset += c.width().unwrap_or(0) as u16;
+        }
+        cursor_offset
     }
 }
 
@@ -149,7 +174,7 @@ impl ComponentRender<RenderProps> for InputBox {
             frame.set_cursor(
                 // Draw the cursor at the current position in the input field.
                 // This position is can be controlled via the left and right arrow key
-                props.area.x + self.cursor_position as u16 + 1,
+                props.area.x + self.get_cursor_offset_in_terminal() as u16 + 1,
                 // Move one line down, from the border to the input line
                 props.area.y + 1,
             )
